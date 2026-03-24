@@ -1,0 +1,7 @@
+Revision history for XARF
+
+0.01  TBD
+    - Initial release
+    - Parser, generator, and validator for XARF v4 reports (spec v4.2.0)
+    - Supports all 7 abuse categories and 32 report types
+    - v3 backward compatibility with automatic conversion

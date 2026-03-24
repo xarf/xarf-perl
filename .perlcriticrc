@@ -1,0 +1,7 @@
+severity = 3
+verbose  = %f:%l:%c: %m (%p; Severity: %s)\n
+
+# Tune noisy policies
+[-RegularExpressions::RequireExtendedFormatting]
+[-ValuesAndExpressions::ProhibitConstantPragma]
+[-ErrorHandling::RequireCarping]

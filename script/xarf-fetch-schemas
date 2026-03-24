@@ -1,0 +1,154 @@
+#!/usr/bin/env perl
+# Installed CLI wrapper for fetch_schemas.pl.
+# Fetches XARF schemas from GitHub into the File::ShareDir dist directory.
+
+use v5.40;
+use File::ShareDir qw(dist_dir);
+use File::Spec;
+use File::Path qw(make_path remove_tree);
+use File::Copy qw(copy);
+use JSON::MaybeXS qw(decode_json encode_json);
+use POSIX qw(strftime);
+use HTTP::Tiny;
+use Archive::Tar;
+
+use XARF;
+
+my $GITHUB_REPO = 'xarf/xarf-spec';
+
+sub schemas_dir {
+    return dist_dir('XARF');
+}
+
+sub needs_fetch {
+    my ($version, $dir) = @_;
+    my $version_file = File::Spec->catfile($dir, '.version');
+    return 1 unless -f $version_file;
+
+    eval {
+        open my $fh, '<', $version_file or die;
+        local $/;
+        my $info = decode_json(<$fh>);
+        close $fh;
+        return $info->{version} ne $version;
+    };
+    return 1 if $@;
+}
+
+sub download {
+    my ($url) = @_;
+    my $http = HTTP::Tiny->new(
+        timeout    => 60,
+        agent      => 'xarf-perl',
+        verify_SSL => 1,
+    );
+    my $response = $http->get($url);
+    unless ($response->{success}) {
+        die "HTTP $response->{status}: $url\n$response->{reason}\n";
+    }
+    return $response->{content};
+}
+
+sub main {
+    my $version = $XARF::SPEC_VERSION;
+    my $dir     = schemas_dir();
+
+    say "[xarf] Target schemas directory: $dir";
+    say "[xarf] Checking schemas for xarf-spec $version...";
+
+    unless (needs_fetch($version, $dir)) {
+        say "[xarf] Schemas already up to date ($version)";
+        return;
+    }
+
+    say "[xarf] Fetching schemas from xarf-spec $version...";
+
+    my $tarball_url = "https://github.com/$GITHUB_REPO/archive/refs/tags/$version.tar.gz";
+    say "[xarf] Downloading $tarball_url...";
+
+    my $tarball_data = download($tarball_url);
+    my $size_kb = sprintf '%.1f', length($tarball_data) / 1024;
+    say "[xarf] Downloaded $size_kb KB";
+
+    # Extract to temp, copy schemas to share dir
+    my $temp_dir = File::Spec->catdir(File::Spec->tmpdir(), "xarf-schemas-$$");
+    make_path($temp_dir);
+
+    my $tarball_path = File::Spec->catfile($temp_dir, 'xarf-spec.tar.gz');
+    open my $fh, '>:raw', $tarball_path or die "Cannot write $tarball_path: $!\n";
+    print $fh $tarball_data;
+    close $fh;
+
+    my $tar = Archive::Tar->new($tarball_path, 1);
+    $tar->setcwd($temp_dir);
+    $tar->extract();
+
+    my $version_without_v = $version =~ s/^v//r;
+    my $extracted_dir = File::Spec->catdir($temp_dir, "xarf-spec-$version_without_v");
+
+    unless (-d $extracted_dir) {
+        opendir my $dh, $temp_dir or die "Cannot read $temp_dir: $!\n";
+        my @dirs = grep { -d File::Spec->catdir($temp_dir, $_) && $_ !~ /^\./ } readdir $dh;
+        closedir $dh;
+        die "No directory found in extracted tarball\n" unless @dirs;
+        $extracted_dir = File::Spec->catdir($temp_dir, $dirs[0]);
+    }
+
+    my $source = File::Spec->catdir($extracted_dir, 'schemas', 'v4');
+    die "Schemas directory not found at $source\n" unless -d $source;
+
+    # Copy schemas
+    make_path(File::Spec->catdir($dir, 'types'));
+
+    opendir my $dh, $source or die "Cannot read $source: $!\n";
+    for my $file (grep { /\.json$/ && -f File::Spec->catfile($source, $_) } readdir $dh) {
+        copy(File::Spec->catfile($source, $file), File::Spec->catfile($dir, $file))
+            or die "Cannot copy $file: $!\n";
+        say "[xarf]   - $file";
+    }
+    closedir $dh;
+
+    my $types_dir = File::Spec->catdir($source, 'types');
+    if (-d $types_dir) {
+        opendir my $tdh, $types_dir or die;
+        for my $file (sort grep { /\.json$/ } readdir $tdh) {
+            copy(File::Spec->catfile($types_dir, $file), File::Spec->catfile($dir, 'types', $file))
+                or die "Cannot copy types/$file: $!\n";
+            say "[xarf]   - types/$file";
+        }
+        closedir $tdh;
+    }
+
+    # Write version info
+    my $version_file = File::Spec->catfile($dir, '.version');
+    open my $vfh, '>', $version_file or die "Cannot write $version_file: $!\n";
+    print $vfh encode_json({
+        version   => $version,
+        fetchedAt => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
+        source    => "https://github.com/$GITHUB_REPO/tree/$version",
+    });
+    close $vfh;
+
+    remove_tree($temp_dir);
+    say "[xarf] Successfully fetched schemas for xarf-spec $version";
+}
+
+main();
+
+__END__
+
+=head1 NAME
+
+xarf-fetch-schemas - Fetch latest XARF schemas from GitHub
+
+=head1 SYNOPSIS
+
+    xarf-fetch-schemas
+
+=head1 DESCRIPTION
+
+Downloads the XARF JSON schemas from the official xarf-spec GitHub
+repository and installs them into the XARF distribution's shared
+data directory.
+
+=cut

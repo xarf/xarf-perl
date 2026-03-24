@@ -1,0 +1,25 @@
+# Version control
+\B\.git\b
+\.gitignore$
+
+# Build artifacts
+^Makefile$
+^Makefile\.old$
+^MYMETA\.
+^blib/
+^pm_to_blib$
+^\.xarf-temp/
+^_build/
+^cover_db/
+
+# Dev/CI files
+^\.github/
+^\.perlcriticrc$
+^\.perltidyrc$
+
+# Temp/editor files
+\.bak$
+\.swp$
+~$
+\.tar\.gz$
+nytprof\.out$

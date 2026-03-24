@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.38'
+          install-modules-with: cpanm
+
+      - name: Install dependencies
+        run: cpanm --installdeps --notest .
+
+      - name: Install dev tools
+        run: cpanm --notest Perl::Critic Perl::Tidy
+
+      - name: Perl::Critic
+        run: perlcritic --stern lib/
+
+      - name: Perl::Tidy format check
+        run: |
+          find lib/ -name '*.pm' | while read f; do
+            perltidy --profile=.perltidyrc -st "$f" | diff -u "$f" - || exit 1
+          done
+
+      - name: POD syntax check
+        run: prove -l t/00-pod.t || true  # will exist after Phase 1
+
+  test:
+    name: Test (Perl ${{ matrix.perl }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        perl: ['5.40']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Perl ${{ matrix.perl }}
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: ${{ matrix.perl }}
+          install-modules-with: cpanm
+
+      - name: Install dependencies
+        run: cpanm --installdeps --notest .
+
+      - name: Fetch schemas
+        run: perl script/fetch_schemas.pl
+
+      - name: Run tests
+        run: prove -l t/
