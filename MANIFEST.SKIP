@@ -20,6 +20,7 @@
 # Temp/editor files
 \.bak$
 \.swp$
+\.tdy$
 ~$
 \.tar\.gz$
 nytprof\.out$
