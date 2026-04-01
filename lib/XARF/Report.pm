@@ -199,7 +199,7 @@ sub from_hashref {
     my $key = "$data->{category}/$data->{type}";
     my $pkg = $TYPE_CLASS{$key}
         or return;    # unknown type — returns undef in scalar context
-    return $pkg->new( %{$data} );
+    return eval { $pkg->new( %{$data} ) };    # undef on construction failure
 }
 
 1;

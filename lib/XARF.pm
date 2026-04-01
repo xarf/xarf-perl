@@ -1,9 +1,15 @@
 package XARF;
 
 use v5.40;
+use Exporter 'import';
 
 our $VERSION      = '0.01';
 our $SPEC_VERSION = 'v4.2.0';
+
+our @EXPORT_OK   = qw(parse);
+our %EXPORT_TAGS = ( all => \@EXPORT_OK );
+
+use XARF::Parser ();
 
 # ---------------------------------------------------------------------------
 # Eager-load all report model classes so XARF::Report->from_hashref works.
@@ -59,6 +65,12 @@ use XARF::Report::Vulnerability::Misconfiguration;
 use XARF::Report::Reputation::Blocklist;
 use XARF::Report::Reputation::ThreatIntelligence;
 
+# ---------------------------------------------------------------------------
+# Exported functions — forwarded to their implementation modules
+# ---------------------------------------------------------------------------
+
+sub parse { goto &XARF::Parser::parse }
+
 1;
 
 __END__
@@ -75,20 +87,24 @@ Version 0.01
 
 =head1 SYNOPSIS
 
-    use XARF qw(parse create_report create_evidence);
+    use XARF qw(parse);
 
-    # Parse a XARF report
+    # Parse a XARF report from a JSON string or hashref
     my $result = parse($json_string);
     my $report = $result->report;
 
-    # Create a new report
-    my $result = create_report(
-        category          => 'messaging',
-        type              => 'spam',
-        source_identifier => '192.0.2.1',
-        reporter          => { org => 'Example', contact => 'abuse@example.com', domain => 'example.com' },
-        sender            => { org => 'Sender',  contact => 'abuse@sender.com',  domain => 'sender.com' },
-    );
+    if ( @{ $result->errors } ) {
+        say "Errors: ", $_->field, ': ', $_->message for @{ $result->errors };
+    }
+
+    # Strict mode — recommended fields required, unknown fields are errors
+    my $strict = parse($json_string, strict => 1);
+
+    # Discover missing optional/recommended fields
+    my $full = parse($json_string, show_missing_optional => 1);
+    for my $item ( @{ $full->info // [] } ) {
+        say $item->{field}, ': ', $item->{message};
+    }
 
 =head1 DESCRIPTION
 
@@ -104,6 +120,15 @@ This is a Perl port of the JavaScript reference implementation.
 
 Loading C<XARF> eager-loads all 32 concrete report model classes, which is
 required for L<XARF::Report/from_hashref> to function correctly.
+
+=head1 FUNCTIONS
+
+=head2 parse
+
+    my $result = parse( $json_string_or_hashref, %opts );
+
+Parse a XARF report.  Returns an L<XARF::Result::Parse>.  See
+L<XARF::Parser/parse> for full documentation of options and behaviour.
 
 =head1 SPEC VERSION
 

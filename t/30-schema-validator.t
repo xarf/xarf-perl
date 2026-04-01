@@ -4,6 +4,7 @@ use Scalar::Util qw(refaddr);
 
 use XARF::SchemaValidator;
 use XARF::ValidationError;
+use XARF::ValidationWarning;
 
 XARF::SchemaValidator->_reset_instance;
 
@@ -140,20 +141,32 @@ subtest '_reset_instance forces re-initialisation' => sub {
 };
 
 # ---------------------------------------------------------------------------
+# Return shape
+# ---------------------------------------------------------------------------
+
+subtest 'validate() returns a hashref with errors and warnings keys' => sub {
+    my $v      = XARF::SchemaValidator->instance;
+    my $result = $v->validate( _spam_required_only() );
+    ok( ref($result) eq 'HASH',  'validate() returns a hashref' );
+    ok( ref( $result->{errors}   ) eq 'ARRAY', 'errors key is arrayref' );
+    ok( ref( $result->{warnings} ) eq 'ARRAY', 'warnings key is arrayref' );
+    ok( !exists $result->{info}, 'info key absent when show_missing_optional not set' );
+};
+
+# ---------------------------------------------------------------------------
 # Valid reports pass without errors
 # ---------------------------------------------------------------------------
 
 subtest 'required-only spam report produces no errors' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate( _spam_required_only() );
-    ok( ref($errors) eq 'ARRAY', 'returns arrayref' );
-    is( scalar @$errors, 0, 'required-only report is valid in normal mode' );
+    my $result = $v->validate( _spam_required_only() );
+    is( scalar @{ $result->{errors} }, 0, 'required-only report is valid in normal mode' );
 };
 
 subtest 'valid ddos report produces no errors' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate( _ddos_report() );
-    is( scalar @$errors, 0, 'no errors for valid DDoS report' );
+    my $result = $v->validate( _ddos_report() );
+    is( scalar @{ $result->{errors} }, 0, 'no errors for valid DDoS report' );
 };
 
 # ---------------------------------------------------------------------------
@@ -162,7 +175,8 @@ subtest 'valid ddos report produces no errors' => sub {
 
 subtest 'incomplete report produces XARF::ValidationError instances' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate( _incomplete_report() );
+    my $result = $v->validate( _incomplete_report() );
+    my $errors = $result->{errors};
     ok( scalar @$errors > 0, 'errors produced for incomplete report' );
     ok( ( grep { ref($_) eq 'XARF::ValidationError' } @$errors ) == scalar @$errors,
         'all errors are XARF::ValidationError instances',
@@ -173,7 +187,8 @@ subtest 'incomplete report produces XARF::ValidationError instances' => sub {
 
 subtest 'type error on source_port produces error naming that field' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate( _wrong_type_report() );
+    my $result = $v->validate( _wrong_type_report() );
+    my $errors = $result->{errors};
     ok( scalar @$errors > 0, 'errors produced' );
 
     # instance_location /source_port is normalised to dot notation: "source_port"
@@ -187,8 +202,8 @@ subtest 'unknown category produces an error' => sub {
     my $v      = XARF::SchemaValidator->instance;
     my $report = _spam_required_only();
     $report->{category} = 'nonexistent';
-    my $errors = $v->validate($report);
-    ok( scalar @$errors > 0, 'error for unknown category' );
+    my $result = $v->validate($report);
+    ok( scalar @{ $result->{errors} } > 0, 'error for unknown category' );
 };
 
 # ---------------------------------------------------------------------------
@@ -207,9 +222,10 @@ subtest 'invalid URI in url field is rejected' => sub {
         type     => 'phishing',
         url      => 'not a valid uri !!',
     };
-    my $errors = $v->validate($r);
-    ok( scalar @$errors > 0, 'invalid URI format rejected' );
-    my @uri_errors = grep { $_->field eq 'url' || $_->message =~ /uri|format/i } @$errors;
+    my $result = $v->validate($r);
+    ok( scalar @{ $result->{errors} } > 0, 'invalid URI format rejected' );
+    my @uri_errors
+        = grep { $_->field eq 'url' || $_->message =~ /uri|format/i } @{ $result->{errors} };
     ok( scalar @uri_errors > 0, 'error targets the url field' );
 };
 
@@ -217,7 +233,8 @@ subtest 'invalid report_id UUID format is rejected' => sub {
     my $v = XARF::SchemaValidator->instance;
     my $r = _spam_required_only();
     $r->{report_id} = 'not-a-uuid';
-    my $errors = $v->validate($r);
+    my $result  = $v->validate($r);
+    my $errors  = $result->{errors};
     ok( scalar @$errors > 0, 'non-UUID report_id rejected' );
     my @id_errors = grep { $_->field eq 'report_id' || $_->message =~ /uuid|format/i } @$errors;
     ok( scalar @id_errors > 0, 'error targets report_id' );
@@ -227,7 +244,8 @@ subtest 'invalid timestamp format is rejected' => sub {
     my $v = XARF::SchemaValidator->instance;
     my $r = _spam_required_only();
     $r->{timestamp} = '2025-01-11 10:59:45';    # space instead of T, missing Z
-    my $errors = $v->validate($r);
+    my $result = $v->validate($r);
+    my $errors = $result->{errors};
     ok( scalar @$errors > 0, 'non-ISO-8601 timestamp rejected' );
     my @ts_errors
         = grep { $_->field eq 'timestamp' || $_->message =~ /date.time|format/i } @$errors;
@@ -240,18 +258,19 @@ subtest 'invalid timestamp format is rejected' => sub {
 
 subtest 'normal mode: required-only report passes' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate( _spam_required_only() );
-    is( scalar @$errors, 0, 'required-only report passes in normal mode' );
+    my $result = $v->validate( _spam_required_only() );
+    is( scalar @{ $result->{errors} }, 0, 'required-only report passes in normal mode' );
 };
 
 subtest 'strict mode: report without recommended fields fails with specific field errors' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate( _spam_required_only(), strict => 1 );
-    ok( scalar @$errors > 0, 'strict mode requires recommended fields' );
+    my $result = $v->validate( _spam_required_only(), strict => 1 );
+    ok( scalar @{ $result->{errors} } > 0, 'strict mode requires recommended fields' );
 
     # Known core recommended fields: source_port, evidence_source, evidence, confidence
     # JSON::Schema::Modern reports these as "object is missing property: X" at root level
-    my $all_text = join "\n", map { $_->field . ' ' . $_->message } @$errors;
+    my $all_text = join "\n",
+        map { $_->field . ' ' . $_->message } @{ $result->{errors} };
     ok( $all_text =~ /source_port/, 'strict errors mention source_port' );
     ok( $all_text =~ /evidence/,    'strict errors mention evidence (or evidence_source)' );
     ok( $all_text =~ /confidence/,  'strict errors mention confidence' );
@@ -259,8 +278,47 @@ subtest 'strict mode: report without recommended fields fails with specific fiel
 
 subtest 'strict mode: full report with all recommended fields passes' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate( _spam_full(), strict => 1 );
-    is( scalar @$errors, 0, 'strict mode passes when all recommended fields are present' );
+    my $result = $v->validate( _spam_full(), strict => 1 );
+    is( scalar @{ $result->{errors} }, 0, 'strict mode passes when all recommended fields are present' );
+};
+
+# ---------------------------------------------------------------------------
+# Unknown field warnings
+# ---------------------------------------------------------------------------
+
+subtest 'valid report with no unknown fields produces no warnings' => sub {
+    my $v      = XARF::SchemaValidator->instance;
+    my $result = $v->validate( _spam_required_only() );
+    is( scalar @{ $result->{warnings} }, 0, 'no warnings for fully known report' );
+};
+
+subtest 'report with an unknown field produces a ValidationWarning' => sub {
+    my $v = XARF::SchemaValidator->instance;
+    my $r = _spam_required_only();
+    $r->{my_custom_field} = 'something';
+    my $result = $v->validate($r);
+    is( scalar @{ $result->{errors} }, 0, 'unknown field is not an error in normal mode' );
+    ok( scalar @{ $result->{warnings} } > 0, 'unknown field produces a warning' );
+    ok( ( grep { ref($_) eq 'XARF::ValidationWarning' } @{ $result->{warnings} } )
+            == scalar @{ $result->{warnings} },
+        'all warnings are XARF::ValidationWarning instances',
+    );
+    my @uf = grep { $_->field eq 'my_custom_field' } @{ $result->{warnings} };
+    ok( scalar @uf > 0, 'warning names the unknown field' );
+    ok( $uf[0]->message =~ /my_custom_field/, 'warning message mentions the field name' );
+};
+
+subtest 'strict mode: unknown field is promoted to an error' => sub {
+    my $v = XARF::SchemaValidator->instance;
+
+    # _spam_full has all recommended fields, so schema errors are 0.
+    # We add one unknown field — in strict mode it should become an error.
+    my $r = _spam_full();
+    $r->{totally_unknown} = 'value';
+    my $result = $v->validate( $r, strict => 1 );
+    ok( scalar @{ $result->{warnings} } == 0, 'no warnings in strict mode' );
+    my @uf_errors = grep { $_->field eq 'totally_unknown' } @{ $result->{errors} };
+    ok( scalar @uf_errors > 0, 'unknown field promoted to error in strict mode' );
 };
 
 # ---------------------------------------------------------------------------
@@ -271,10 +329,13 @@ subtest 'validate() deduplicates errors that JSM emits more than once' => sub {
     my $v      = XARF::SchemaValidator->instance;
     my $report = _incomplete_report();
 
-    # Peek at the raw (undeduped) output directly from the JSON::Schema::Modern
-    # instance. The master schema references xarf-core.json in allOf[0], and
-    # the matched type schema also references xarf-core.json in its own allOf[0],
-    # so core-required field errors appear at least twice in the raw output.
+    # We reach into the private _jsm attribute here deliberately: we need to
+    # inspect the raw JSON::Schema::Modern output *before* deduplication to
+    # prove that duplicates actually exist in practice (and therefore that
+    # the dedup logic is load-bearing rather than dead code).
+    # The master schema references xarf-core.json in allOf[0], and the matched
+    # type schema also references xarf-core.json in its own allOf[0], so
+    # core-required field errors appear at least twice in the raw output.
     my @raw_errors
         = $v->_jsm->evaluate( $report, 'https://xarf.org/schemas/v4/xarf-v4-master.json' )->errors;
     my %raw_seen;
@@ -282,12 +343,54 @@ subtest 'validate() deduplicates errors that JSM emits more than once' => sub {
         = grep { $raw_seen{ "" . $_->instance_location . "\0" . $_->error }++ } @raw_errors;
     ok( scalar @raw_dupes > 0, 'raw JSM output contains duplicate errors — dedup is needed' );
 
-    my $deduped = $v->validate($report);
+    my $result  = $v->validate($report);
+    my $deduped = $result->{errors};
     ok( scalar @$deduped < scalar @raw_errors, 'validate() reduces error count via deduplication' );
 
     my %seen;
     my @dupes = grep { $seen{ $_->field . "\0" . $_->message }++ } @$deduped;
     is( scalar @dupes, 0, 'output has no duplicate (field, message) pairs' );
+};
+
+# ---------------------------------------------------------------------------
+# show_missing_optional
+# ---------------------------------------------------------------------------
+
+subtest 'show_missing_optional adds info key to result' => sub {
+    my $v      = XARF::SchemaValidator->instance;
+    my $result = $v->validate( _spam_required_only(), show_missing_optional => 1 );
+    ok( exists $result->{info}, 'info key present when show_missing_optional => 1' );
+    ok( ref( $result->{info} ) eq 'ARRAY', 'info is an arrayref' );
+};
+
+subtest 'show_missing_optional lists missing recommended core fields' => sub {
+    my $v      = XARF::SchemaValidator->instance;
+    my $result = $v->validate( _spam_required_only(), show_missing_optional => 1 );
+    my @fields = map { $_->{field} } @{ $result->{info} };
+    ok( ( grep { $_ eq 'confidence' } @fields ),     'confidence listed as missing' );
+    ok( ( grep { $_ eq 'evidence_source' } @fields ), 'evidence_source listed as missing' );
+};
+
+subtest 'show_missing_optional info items have field and message keys' => sub {
+    my $v      = XARF::SchemaValidator->instance;
+    my $result = $v->validate( _spam_required_only(), show_missing_optional => 1 );
+    for my $item ( @{ $result->{info} } ) {
+        ok( exists $item->{field},   'item has field key' );
+        ok( exists $item->{message}, 'item has message key' );
+        ok( $item->{message} =~ /^(RECOMMENDED|OPTIONAL):/,
+            "message prefixed with RECOMMENDED or OPTIONAL: $item->{message}" );
+    }
+};
+
+subtest 'show_missing_optional does not include present fields' => sub {
+    my $v = XARF::SchemaValidator->instance;
+
+    # _spam_full has confidence, evidence_source, evidence, source_port
+    my $result = $v->validate( _spam_full(), show_missing_optional => 1 );
+    my @fields = map { $_->{field} } @{ $result->{info} };
+    ok( !( grep { $_ eq 'confidence' }     @fields ), 'confidence not listed (present)' );
+    ok( !( grep { $_ eq 'evidence_source' } @fields ), 'evidence_source not listed (present)' );
+    ok( !( grep { $_ eq 'source_port' }    @fields ), 'source_port not listed (present)' );
 };
 
 # ---------------------------------------------------------------------------
@@ -349,43 +452,43 @@ subtest 'has_type_schema returns 0 for unknown types' => sub {
 
 subtest 'content/phishing report validates' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate(
+    my $result = $v->validate(
         {   _core_fields(),
             category => 'content',
             type     => 'phishing',
             url      => 'https://evil.example/login',
         }
     );
-    is( scalar @$errors, 0, 'content/phishing passes' );
+    is( scalar @{ $result->{errors} }, 0, 'content/phishing passes' );
 };
 
 subtest 'infrastructure/botnet report validates' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate(
+    my $result = $v->validate(
         {   _core_fields(),
             category            => 'infrastructure',
             type                => 'botnet',
             compromise_evidence => 'cnc_traffic',
         }
     );
-    is( scalar @$errors, 0, 'infrastructure/botnet passes' );
+    is( scalar @{ $result->{errors} }, 0, 'infrastructure/botnet passes' );
 };
 
 subtest 'copyright/copyright report validates' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate(
+    my $result = $v->validate(
         {   _core_fields(),
             category       => 'copyright',
             type           => 'copyright',
             infringing_url => 'https://pirate.example/movie.mp4',
         }
     );
-    is( scalar @$errors, 0, 'copyright/copyright passes' );
+    is( scalar @{ $result->{errors} }, 0, 'copyright/copyright passes' );
 };
 
 subtest 'vulnerability/cve report validates' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate(
+    my $result = $v->validate(
         {   _core_fields(),
             category     => 'vulnerability',
             type         => 'cve',
@@ -394,19 +497,19 @@ subtest 'vulnerability/cve report validates' => sub {
             cve_id       => 'CVE-2024-1234',
         }
     );
-    is( scalar @$errors, 0, 'vulnerability/cve passes' );
+    is( scalar @{ $result->{errors} }, 0, 'vulnerability/cve passes' );
 };
 
 subtest 'reputation/blocklist report validates' => sub {
     my $v      = XARF::SchemaValidator->instance;
-    my $errors = $v->validate(
+    my $result = $v->validate(
         {   _core_fields(),
             category    => 'reputation',
             type        => 'blocklist',
             threat_type => 'spam_source',
         }
     );
-    is( scalar @$errors, 0, 'reputation/blocklist passes' );
+    is( scalar @{ $result->{errors} }, 0, 'reputation/blocklist passes' );
 };
 
 done_testing;

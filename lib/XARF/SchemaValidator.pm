@@ -12,6 +12,7 @@ use Storable qw(dclone);
 use XARF::SchemaError;
 use XARF::SchemaRegistry;
 use XARF::ValidationError;
+use XARF::ValidationWarning;
 
 our $VERSION = '0.01';
 
@@ -169,33 +170,88 @@ sub _promote_recommended {
 # Public API
 # ---------------------------------------------------------------------------
 
-=head2 validate( $report_hashref, strict => 0 )
+=head2 validate( $report_hashref, %opts )
 
-Validates C<$report_hashref> against the XARF v4 master schema.  Returns an
-arrayref of L<XARF::ValidationError> objects, or an empty arrayref on success.
+Validates C<$report_hashref> against the XARF v4 master schema and checks for
+unknown fields.  Returns a hashref with two keys:
 
-When C<strict> is true, C<x-recommended> fields are promoted to required
-before validation.
+=over 4
+
+=item C<errors>
+
+Arrayref of L<XARF::ValidationError> objects.  Empty on success.
+
+=item C<warnings>
+
+Arrayref of L<XARF::ValidationWarning> objects for unknown fields.  In strict
+mode unknown-field warnings are promoted to errors and this arrayref will be
+empty.
+
+=item C<info>
+
+Only present when C<show_missing_optional =E<gt> 1> is passed.  Arrayref of
+plain hashrefs C<< { field => $name, message => $text } >> describing optional
+and recommended fields absent from the report.
+
+=back
+
+Accepted options:
+
+=over 4
+
+=item C<strict =E<gt> 0|1>
+
+When true, C<x-recommended> fields are promoted to required before schema
+validation, and any unknown-field warnings are converted to errors.
+
+=item C<show_missing_optional =E<gt> 0|1>
+
+When true, the returned hashref includes an C<info> key listing every optional
+and recommended field that is absent from the report.
+
+=back
 
 =cut
 
 sub validate {
     my ( $self, $report, %opts ) = @_;
-    my $strict = $opts{strict} // 0;
+    my $strict       = $opts{strict}                // 0;
+    my $show_missing = $opts{show_missing_optional} // 0;
 
+    # 1. JSON Schema validation
     my $jsm        = $strict ? $self->_strict_jsm : $self->_jsm;
     my $master_uri = 'https://xarf.org/schemas/v4/xarf-v4-master.json';
 
-    my $result = $jsm->evaluate( $report, $master_uri );
-    return [] if $result->valid;
+    my $jsm_result = $jsm->evaluate( $report, $master_uri );
+    my @errors;
+    unless ( $jsm_result->valid ) {
+        @errors = map { _format_validation_error($_) } $jsm_result->errors;
 
-    my @errors = map { _format_validation_error($_) } $result->errors;
+        # Deduplicate on (field, message) pair — same strategy as JS reference
+        my %seen;
+        @errors = grep { !$seen{ $_->field . "\0" . $_->message }++ } @errors;
+    }
 
-    # Deduplicate on (field, message) pair — same strategy as JS reference
-    my %seen;
-    my @unique = grep { !$seen{ $_->field . "\0" . $_->message }++ } @errors;
+    # 2. Unknown field warnings
+    my @warnings = @{ $self->_collect_unknown_fields($report) };
 
-    return \@unique;
+    # 3. In strict mode, unknown-field warnings become errors (mirrors JS XARFValidator)
+    if ( $strict && @warnings ) {
+        push @errors,
+            map { XARF::ValidationError->new( field => $_->field, message => $_->message ) }
+            @warnings;
+        @warnings = ();
+    }
+
+    # 4. Missing optional / recommended fields
+    my $info;
+    if ($show_missing) {
+        $info = $self->_collect_missing_optional($report);
+    }
+
+    my %result = ( errors => \@errors, warnings => \@warnings );
+    $result{info} = $info if $show_missing;
+    return \%result;
 }
 
 =head2 get_supported_types
@@ -230,7 +286,111 @@ sub has_type_schema {
 }
 
 # ---------------------------------------------------------------------------
-# Private helpers
+# Private helpers — unknown field detection
+# ---------------------------------------------------------------------------
+
+sub _collect_unknown_fields {
+    my ( $self, $report ) = @_;
+    my $reg = XARF::SchemaRegistry->instance;
+
+    # Build set of all known fields: core + category-specific
+    my %known = map { $_ => 1 } @{ $reg->get_core_property_names() };
+    if ( $report->{category} && $report->{type} ) {
+        $known{$_} = 1
+            for @{ $reg->get_category_fields( $report->{category}, $report->{type} ) };
+    }
+
+    my @warnings;
+    for my $field ( sort keys %$report ) {
+        unless ( $known{$field} ) {
+            push @warnings,
+                XARF::ValidationWarning->new(
+                field   => $field,
+                message => "Unknown field '$field' is not defined in the XARF schema",
+                );
+        }
+    }
+    return \@warnings;
+}
+
+# ---------------------------------------------------------------------------
+# Private helpers — missing optional/recommended field discovery
+# ---------------------------------------------------------------------------
+
+sub _collect_missing_optional {
+    my ( $self, $report ) = @_;
+    my $reg = XARF::SchemaRegistry->instance;
+
+    my @info;
+    my %seen;
+
+    # Core optional/recommended fields (skip required and _internal)
+    my %req = map { $_ => 1 } @{ $reg->get_required_fields() };
+    for my $field ( @{ $reg->get_core_property_names() } ) {
+        next if $req{$field} || $field eq '_internal';
+        next if exists $report->{$field};
+        $seen{$field} = 1;
+        my $meta   = $reg->get_field_metadata($field);
+        my $prefix = ( $meta && $meta->recommended ) ? 'RECOMMENDED' : 'OPTIONAL';
+        my $desc   = $meta ? $meta->description                      : "Optional field: $field";
+        push @info, { field => $field, message => "$prefix: $desc" };
+    }
+
+    # Type-specific optional/recommended fields
+    my ( $cat, $type ) = ( $report->{category}, $report->{type} );
+    if ( $cat && $type ) {
+        my $schema = $reg->get_type_schema( $cat, $type );
+        $self->_extract_optional_fields( $schema, $report, \@info, \%seen ) if $schema;
+    }
+
+    return \@info;
+}
+
+# Recursively extracts optional fields from a schema node (handles allOf
+# and follows -base.json $refs, mirroring JS extractOptionalFields).
+sub _extract_optional_fields {
+    my ( $self, $schema, $report, $info, $seen ) = @_;
+    return unless ref($schema) eq 'HASH';
+
+    # Direct properties in this schema node
+    if ( ref( $schema->{properties} ) eq 'HASH' ) {
+        my %req = map { $_ => 1 } @{ $schema->{required} // [] };
+        for my $field ( sort keys %{ $schema->{properties} } ) {
+            next if $req{$field} || $seen->{$field} || exists $report->{$field};
+            $seen->{$field} = 1;
+            my $prop   = $schema->{properties}{$field};
+            my $prefix = $prop->{'x-recommended'} ? 'RECOMMENDED' : 'OPTIONAL';
+            my $desc   = $prop->{description} // "Optional field: $field";
+            push @$info, { field => $field, message => "$prefix: $desc" };
+        }
+    }
+
+    # Recurse into allOf entries
+    for my $sub ( @{ $schema->{allOf} // [] } ) {
+        if ( my $ref = $sub->{'$ref'} ) {
+
+            # Follow only -base.json refs (mirrors JS resolveBaseRef); skip core ref
+            if ( $ref =~ /-base\.json/ ) {
+                my $base = $self->_load_ref_schema($ref);
+                $self->_extract_optional_fields( $base, $report, $info, $seen ) if $base;
+            }
+        } else {
+            $self->_extract_optional_fields( $sub, $report, $info, $seen );
+        }
+    }
+    return;
+}
+
+sub _load_ref_schema {
+    my ( $self, $ref ) = @_;
+    ( my $filename = $ref ) =~ s{^\./}{};
+    $filename =~ s{^\.\./}{};
+    my $path = File::Spec->catfile( $self->_schemas_dir, 'types', $filename );
+    return _load_json($path);
+}
+
+# ---------------------------------------------------------------------------
+# Private helpers — shared
 # ---------------------------------------------------------------------------
 
 sub _format_validation_error {
@@ -279,15 +439,29 @@ Version 0.01
     my $validator = XARF::SchemaValidator->instance;
 
     # Validate a report hashref
-    my $errors = $validator->validate($report_hashref);
-    if (@$errors) {
-        for my $err (@$errors) {
+    my $result = $validator->validate($report_hashref);
+    if ( @{ $result->{errors} } ) {
+        for my $err ( @{ $result->{errors} } ) {
             printf "  %s: %s\n", $err->field || '(root)', $err->message;
         }
     }
 
-    # Strict mode: x-recommended fields become required
-    my $strict_errors = $validator->validate($report_hashref, strict => 1);
+    # Warnings for unknown fields
+    for my $w ( @{ $result->{warnings} } ) {
+        printf "  WARNING %s: %s\n", $w->field, $w->message;
+    }
+
+    # Strict mode: x-recommended fields become required; unknown fields → errors
+    my $strict_result = $validator->validate($report_hashref, strict => 1);
+
+    # Discover missing optional/recommended fields
+    my $full = $validator->validate(
+        $report_hashref,
+        show_missing_optional => 1,
+    );
+    for my $item ( @{ $full->{info} } ) {
+        printf "  %s: %s\n", $item->{field}, $item->{message};
+    }
 
     # Introspect supported types
     my $types = $validator->get_supported_types;    # arrayref of "category/type"
@@ -296,7 +470,9 @@ Version 0.01
 =head1 DESCRIPTION
 
 C<XARF::SchemaValidator> validates XARF report hashrefs against the official
-XARF v4 JSON schemas using L<JSON::Schema::Modern> (Draft 2020-12).
+XARF v4 JSON schemas using L<JSON::Schema::Modern> (Draft 2020-12).  It also
+detects unknown fields (fields not defined in any XARF schema) and can
+enumerate missing optional/recommended fields on request.
 
 It is a singleton — call C<< XARF::SchemaValidator->instance >> to obtain the
 shared instance.  Schemas are loaded lazily on first use from the bundled
@@ -327,18 +503,34 @@ one.  Intended for test isolation only.
 
 =head2 validate
 
-    my $errors = $validator->validate($report_hashref);
-    my $errors = $validator->validate($report_hashref, strict => 1);
+    my $result = $validator->validate($report_hashref);
+    my $result = $validator->validate($report_hashref, strict => 1);
+    my $result = $validator->validate($report_hashref, show_missing_optional => 1);
 
-Validates C<$report_hashref> against the master XARF v4 schema.
+Validates C<$report_hashref> against the master XARF v4 schema and checks for
+unknown fields.
 
-Returns an arrayref of L<XARF::ValidationError> objects.  Returns an empty
-arrayref when the report is valid.  Errors are deduplicated on
-C<(field, message)> pair.
+Returns a hashref with:
 
-When C<strict =E<gt> 1> is passed, fields marked C<x-recommended: true> in
-the schema are treated as required and their absence produces validation
-errors.
+=over 4
+
+=item C<errors>
+
+Arrayref of L<XARF::ValidationError> objects (empty when valid).  Errors are
+deduplicated on C<(field, message)> pair.
+
+=item C<warnings>
+
+Arrayref of L<XARF::ValidationWarning> objects for any unknown fields.  Empty
+in strict mode (unknown-field warnings are promoted to errors instead).
+
+=item C<info>
+
+Only present when C<show_missing_optional =E<gt> 1> is passed.  Arrayref of
+plain hashrefs C<< { field => $name, message => $text } >> where C<$text>
+begins with C<RECOMMENDED:> or C<OPTIONAL:>.
+
+=back
 
 =head2 get_supported_types
 
@@ -364,6 +556,7 @@ MIT License. See the LICENSE file for details.
 
 =head1 SEE ALSO
 
-L<XARF>, L<XARF::SchemaRegistry>, L<XARF::ValidationError>
+L<XARF>, L<XARF::SchemaRegistry>, L<XARF::ValidationError>,
+L<XARF::ValidationWarning>
 
 =cut
