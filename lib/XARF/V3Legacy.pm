@@ -229,7 +229,9 @@ sub _add_messaging_fields {
         // ( ref( $report->{AdditionalInfo} ) && $report->{AdditionalInfo}{Subject} );
     $v4->{subject} = $subject if $subject;
 
-    my $src_port = ( ref( $report->{Source} ) && $report->{Source}{Port} ) // $report->{SourcePort};
+    my $src_port;
+    $src_port = $report->{Source}{Port} if ref( $report->{Source} );
+    $src_port //= $report->{SourcePort};
     $v4->{source_port} = $src_port if defined $src_port;
 
     return;
@@ -248,7 +250,9 @@ sub _add_connection_fields {
     $v4->{destination_ip}   = $report->{DestinationIp}   if $report->{DestinationIp};
     $v4->{destination_port} = $report->{DestinationPort} if defined $report->{DestinationPort};
 
-    my $src_port = ( ref( $report->{Source} ) && $report->{Source}{Port} ) // $report->{SourcePort};
+    my $src_port;
+    $src_port = $report->{Source}{Port} if ref( $report->{Source} );
+    $src_port //= $report->{SourcePort};
     $v4->{source_port} = $src_port if defined $src_port;
 
     # AttackCount has no direct v4 equivalent; pass through as additional property
@@ -261,8 +265,8 @@ sub _add_content_fields {
     my ( $v4, $report ) = @_;
 
     my $url = $report->{Url}
-        // ( ref( $report->{AdditionalInfo} ) && $report->{AdditionalInfo}{URL} )
-        // ( ref( $report->{Source} )         && $report->{Source}{URL} )
+        || ( ref( $report->{AdditionalInfo} ) && $report->{AdditionalInfo}{URL} )
+        || ( ref( $report->{Source} )         && $report->{Source}{URL} )
         or die XARF::ParseError->new(
         message => "Cannot convert v3 report: missing URL for content type '$v4->{type}'. "
             . 'Content reports require a URL field' );
@@ -271,22 +275,26 @@ sub _add_content_fields {
     return;
 }
 
-# Generate a UUID v4 string.  Uses Data::UUID if available; falls back to a
-# pseudo-random hex string so the module does not hard-depend on it at runtime
-# (Data::UUID is listed as an optional dep for the generator; here we just need
-# something unique for the converted report_id).
+# Generate a UUID v4 string from /dev/urandom, matching the approach used in
+# XARF::Generator.  No external dependencies required.
 sub _new_uuid {
-    if ( eval { require Data::UUID; 1 } ) {
-        return lc Data::UUID->new->create_str();
-    }
+    open my $fh, '<:raw', '/dev/urandom'
+        or die "Cannot open /dev/urandom: $!\n";
+    read $fh, my $raw, 16;
+    close $fh;
 
-    # Fallback: construct a UUID-shaped string from random bytes
-    my @hex;
-    push @hex, sprintf '%08x', int( rand(0xFFFFFFFF) ) for 1 .. 4;
-    return sprintf '%s-%s-%s-%s-%s', $hex[0], substr( $hex[1], 0, 4 ),
-        '4' . substr( $hex[1], 4 ),
-        sprintf( '%x', 0x8 | ( int( rand(4) ) ) ) . substr( $hex[2], 1 ),
-        $hex[2] . $hex[3];
+    my @octets = unpack 'C16', $raw;
+    $octets[6] = ( $octets[6] & 0x0f ) | 0x40;    # version 4
+    $octets[8] = ( $octets[8] & 0x3f ) | 0x80;    # variant 1
+
+    return sprintf(
+        '%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x',
+        @octets[ 0 .. 3 ],
+        @octets[ 4 .. 5 ],
+        @octets[ 6 .. 7 ],
+        @octets[ 8 .. 9 ],
+        @octets[ 10 .. 15 ]
+    );
 }
 
 sub _now_iso8601 {
