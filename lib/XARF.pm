@@ -3,7 +3,7 @@ package XARF;
 use v5.40;
 use Exporter 'import';
 
-our $VERSION      = '0.01';
+our $VERSION      = '1.00';
 our $SPEC_VERSION = '4.2.0';
 
 our @EXPORT_OK   = qw(parse create_report create_evidence);
@@ -86,7 +86,7 @@ XARF - XARF v4 parser and report generator
 
 =head1 VERSION
 
-Version 0.01
+Version 1.00
 
 =head1 SYNOPSIS
 

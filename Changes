@@ -1,7 +1,24 @@
 Revision history for XARF
 
-0.01  TBD
-    - Initial release
-    - Parser, generator, and validator for XARF v4 reports (spec v4.2.0)
-    - Supports all 7 abuse categories and 32 report types
-    - v3 backward compatibility with automatic conversion
+1.00  2026-04-01
+    - Initial release (XARF spec v4.2.0)
+    - Parser: parse() accepts JSON strings and hashrefs; supports strict mode
+      and show_missing_optional; auto-detects and converts XARF v3 reports
+    - Generator: create_report() builds validated reports with auto-generated
+      xarf_version, report_id (UUID v4), and timestamp (ISO 8601)
+    - Evidence: create_evidence() with automatic base64 encoding, hashing
+      (sha256 default; sha512/sha1/md5 supported), and size calculation
+    - Schema-driven validation via JSON::Schema::Modern (Draft 2020-12)
+    - Supports all 7 abuse categories (messaging, connection, content,
+      infrastructure, copyright, vulnerability, reputation) and all 32 report
+      types defined by the specification
+    - XARF::SchemaRegistry singleton: schema-derived category/type introspection
+      and field metadata without hardcoded rules
+    - v3 backward compatibility with automatic conversion and deprecation
+      warnings (XARF::V3Legacy)
+    - Bundled schemas shipped as File::ShareDir share files; xarf-fetch-schemas
+      installed CLI to pull updated schemas from xarf-spec
+    - Result objects (XARF::Result::Parse, XARF::Result::CreateReport) with
+      structured errors, warnings, and optional info list
+    - Complete exception hierarchy: XARF::Error, XARF::ParseError,
+      XARF::ValidationError, XARF::SchemaError
