@@ -264,7 +264,8 @@ sub _add_connection_fields {
 sub _add_content_fields {
     my ( $v4, $report ) = @_;
 
-    my $url = $report->{Url}
+    my $url
+        = $report->{Url}
         || ( ref( $report->{AdditionalInfo} ) && $report->{AdditionalInfo}{URL} )
         || ( ref( $report->{Source} )         && $report->{Source}{URL} )
         or die XARF::ParseError->new(
