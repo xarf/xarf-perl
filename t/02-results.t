@@ -97,11 +97,13 @@ subtest 'Result::CreateReport — defaults' => sub {
     is( $result->report,   undef, 'report defaults to undef' );
     is( $result->errors,   [],    'errors defaults to empty arrayref' );
     is( $result->warnings, [],    'warnings defaults to empty arrayref' );
+    is( $result->info,     undef, 'info defaults to undef' );
 };
 
-subtest 'Result::CreateReport — no info attribute' => sub {
-    my $result = XARF::Result::CreateReport->new();
-    ok( !$result->can('info'), 'CreateReport has no info attribute' );
+subtest 'Result::CreateReport — with info' => sub {
+    my $result = XARF::Result::CreateReport->new( info => [ { field => 'confidence', message => 'OPTIONAL: ...' } ] );
+    ref_ok( $result->info, 'ARRAY', 'info is arrayref' );
+    is( $result->info->[0]{field}, 'confidence', 'info entry stored' );
 };
 
 subtest 'Result::CreateReport — with errors' => sub {

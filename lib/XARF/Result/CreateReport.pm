@@ -17,9 +17,13 @@ has warnings => (
     default => sub { [] },
 );
 
+has info => ( is => 'ro', );
+
 1;
 
 __END__
+
+=encoding UTF-8
 
 =head1 NAME
 
@@ -45,27 +49,34 @@ Version 0.01
         for my $err ( @{ $result->errors } ) {
             say $err->field . ': ' . $err->message;
         }
-    }
-    else {
+    } else {
         my $report = $result->report;
         say $report->to_json;
+    }
+
+    # Optional-field discovery
+    my $result2 = create_report( %fields, show_missing_optional => 1 );
+    for my $item ( @{ $result2->info // [] } ) {
+        say $item->{field} . ': ' . $item->{message};
     }
 
 =head1 DESCRIPTION
 
 C<XARF::Result::CreateReport> is the value returned by L<XARF/create_report>.
-It has the same shape as L<XARF::Result::Parse> but without the C<info>
-attribute (optional-field discovery is a parsing-time concept).
+It has the same shape as L<XARF::Result::Parse>, including the optional C<info>
+attribute populated when C<show_missing_optional =E<gt> 1> is passed.
 
-A successful creation has an empty C<errors> list and a fully-populated
-C<report>. A failed creation has one or more entries in C<errors> and
-C<report> is C<undef>.
+Unlike the parse path, C<report> is always populated when the category and type
+are recognisable — validation errors are informational and do not suppress the
+report object.  This mirrors the behaviour of the JavaScript reference
+implementation's C<createReport()>.
 
 =head1 ATTRIBUTES
 
 =head2 report
 
-An L<XARF::Report> subclass instance, or C<undef> if creation failed.
+An L<XARF::Report> subclass instance, or C<undef> if the category/type could
+not be resolved (e.g. completely unknown type).
 
 =head2 errors
 
@@ -75,6 +86,12 @@ An arrayref of L<XARF::ValidationError> objects. Empty on success.
 
 An arrayref of L<XARF::ValidationWarning> objects. May be non-empty even on
 success (e.g. when recommended fields were not supplied).
+
+=head2 info
+
+An arrayref of optional-field metadata hashrefs, or C<undef>.  Populated when
+C<show_missing_optional =E<gt> 1> is passed to L<XARF/create_report>.  Each
+entry is a plain hashref with C<field> and C<message> keys.
 
 =head1 AUTHOR
 

@@ -4,12 +4,13 @@ use v5.40;
 use Exporter 'import';
 
 our $VERSION      = '0.01';
-our $SPEC_VERSION = 'v4.2.0';
+our $SPEC_VERSION = '4.2.0';
 
-our @EXPORT_OK   = qw(parse);
+our @EXPORT_OK   = qw(parse create_report create_evidence);
 our %EXPORT_TAGS = ( all => \@EXPORT_OK );
 
-use XARF::Parser ();
+use XARF::Generator ();
+use XARF::Parser    ();
 
 # ---------------------------------------------------------------------------
 # Eager-load all report model classes so XARF::Report->from_hashref works.
@@ -69,7 +70,9 @@ use XARF::Report::Reputation::ThreatIntelligence;
 # Exported functions — forwarded to their implementation modules
 # ---------------------------------------------------------------------------
 
-sub parse { goto &XARF::Parser::parse }
+sub parse           { goto &XARF::Parser::parse }
+sub create_report   { goto &XARF::Generator::create_report }
+sub create_evidence { goto &XARF::Generator::create_evidence }
 
 1;
 
@@ -87,7 +90,7 @@ Version 0.01
 
 =head1 SYNOPSIS
 
-    use XARF qw(parse);
+    use XARF qw(parse create_report create_evidence);
 
     # Parse a XARF report from a JSON string or hashref
     my $result = parse($json_string);
@@ -105,6 +108,24 @@ Version 0.01
     for my $item ( @{ $full->info // [] } ) {
         say $item->{field}, ': ', $item->{message};
     }
+
+    # Generate a report
+    my $ev = create_evidence(
+        content_type => 'message/rfc822',
+        payload      => $raw_email,
+        description  => 'Original spam email',
+    );
+
+    my $gen = create_report(
+        category          => 'messaging',
+        type              => 'spam',
+        source_identifier => '192.0.2.1',
+        reporter => { org => 'My ISP', contact => 'abuse@example.com', domain => 'example.com' },
+        sender   => { org => 'Spammer', contact => 'x@spammer.example', domain => 'spammer.example' },
+        protocol => 'smtp',
+        evidence => [$ev],
+    );
+    say $gen->report->to_json unless @{ $gen->errors };
 
 =head1 DESCRIPTION
 
@@ -129,6 +150,21 @@ required for L<XARF::Report/from_hashref> to function correctly.
 
 Parse a XARF report.  Returns an L<XARF::Result::Parse>.  See
 L<XARF::Parser/parse> for full documentation of options and behaviour.
+
+=head2 create_report
+
+    my $result = create_report( %args );
+
+Generate a validated XARF report with auto-filled C<xarf_version>,
+C<report_id>, and C<timestamp>.  Returns an L<XARF::Result::CreateReport>.
+See L<XARF::Generator/create_report> for full documentation.
+
+=head2 create_evidence
+
+    my $evidence = create_evidence( %args );
+
+Create an L<XARF::Evidence> object with automatic base64 encoding and hash
+computation.  See L<XARF::Generator/create_evidence> for full documentation.
 
 =head1 SPEC VERSION
 
