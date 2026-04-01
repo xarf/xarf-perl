@@ -179,7 +179,8 @@ sub main {
 
     say "[xarf] Fetching schemas from xarf-spec $version...";
 
-    my $tarball_url = "https://github.com/$GITHUB_REPO/archive/refs/tags/$version.tar.gz";
+    my $tag = $version =~ /^v/ ? $version : "v$version";
+    my $tarball_url = "https://github.com/$GITHUB_REPO/archive/refs/tags/$tag.tar.gz";
     say "[xarf] Downloading $tarball_url...";
 
     my $tarball_data = download($tarball_url);
